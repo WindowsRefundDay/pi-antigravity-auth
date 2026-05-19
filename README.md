@@ -5,9 +5,10 @@ Pi Coding Agent provider extension for Google Antigravity OAuth models, plus Gem
 > **Warning**
 >
 > This project uses Google OAuth credentials and local account tokens. It may affect provider quotas, account standing, or ToS compliance. Use at your own risk.
-
-> [!WARNING]
-> **Deprecation Notice:** Following Google's official announcement transitioning from Gemini CLI to Antigravity CLI, the classic Gemini CLI and its separate quota are expected to be discontinued or restricted to enterprise customers via paid platform APIs. Consequently, the separate `Gemini CLI quota` models may become completely unsupported or cease to function in future releases. We highly recommend migrating your active workflows to the main `Antigravity quota` models.
+>
+> **Deprecation Notice**
+>
+> Following Google's official announcement transitioning from Gemini CLI to Antigravity CLI, the classic Gemini CLI and its separate quota are expected to be discontinued or restricted to enterprise customers via paid platform APIs. Consequently, the separate Gemini CLI quota models may become completely unsupported or cease to function in future releases. We highly recommend migrating your active workflows to the main Antigravity quota models.
 
 ## What you get
 
