@@ -1,20 +1,14 @@
 # pi-antigravity-auth
 
-Pi Coding Agent provider extension for Google Antigravity OAuth models, plus Gemini CLI quota routing and multi-account rotation.
+Pi Coding Agent provider extension for Google Antigravity OAuth models with multi-account rotation.
 
 > **Warning**
 >
 > This project uses Google OAuth credentials and local account tokens. It may affect provider quotas, account standing, or ToS compliance. Use at your own risk.
 >
-> **Deprecation Notice**
->
-> Following Google's official announcement transitioning from Gemini CLI to Antigravity CLI, the classic Gemini CLI and its separate quota are expected to be discontinued or restricted to enterprise customers via paid platform APIs. Consequently, the separate Gemini CLI quota models may become completely unsupported or cease to function in future releases. We highly recommend migrating your active workflows to the main Antigravity quota models.
-
 ## What you get
 
 - **Google OAuth sign-in** with automatic token refresh
-- **Dual quota system** (Antigravity quota and Gemini CLI fallback quota)
-- **Auto Quota**: Intelligent automatic load balancing and fallback between Antigravity and Gemini CLI quota pools
 - **Multi-account rotation**
 - **Real-time SSE streaming** with tool calls and thinking blocks
 - **Variant-style thinking control**
@@ -83,30 +77,33 @@ List registered models:
 pi --list-models antigravity
 ```
 
+### Gemini 3.6 Flash
+
+`gemini-3.6-flash-{low,medium,high}` routes through the main Antigravity quota. The IDs match the model IDs exposed by the official `agy models` command; use the suffix to select the Antigravity reasoning tier. These are the recommended Gemini Flash models for new Pi sessions.
+
+```bash
+pi --provider antigravity --model gemini-3.6-flash-medium
+```
+
 ### Available Models
 
 | Model | Notes |
 |---|---|
-| `gemini-3.5-flash-high` | Antigravity quota |
-| `gemini-3.5-flash-medium` | Antigravity quota |
+| `gemini-3.6-flash-high` | Current Antigravity quota model |
+| `gemini-3.6-flash-medium` | Current Antigravity quota model |
+| `gemini-3.6-flash-low` | Current Antigravity quota model |
 | `gemini-3.1-pro-high` | Antigravity quota |
 | `gemini-3.1-pro-low` | Antigravity quota |
 | `gemini-3-flash` | Antigravity quota |
 | `claude-sonnet-4-6-thinking` | Antigravity quota |
 | `claude-opus-4-6-thinking` | Antigravity quota |
 | `gpt-oss-120b-medium` | Antigravity quota |
-| `gemini-3-pro-preview` | Gemini CLI quota |
-| `gemini-3.1-pro-preview` | Gemini CLI quota |
-| `gemini-3-flash-preview` | Gemini CLI quota |
-| `gemini-cli-3-pro-preview` | Gemini CLI quota |
-| `gemini-cli-3.1-pro-preview` | Gemini CLI quota |
-| `gemini-cli-3-flash-preview` | Gemini CLI quota |
 
 ### Model Variants
 Variants let you change thinking mode/level per model.
 ```bash
-pi --provider antigravity --model gemini-3.5-flash-high
-pi --provider antigravity --model gemini-3.5-flash-medium
+pi --provider antigravity --model gemini-3.6-flash-high
+pi --provider antigravity --model gemini-3.6-flash-medium
 pi --provider antigravity --model gemini-3.1-pro-high
 pi --provider antigravity --model claude-opus-4-6-thinking
 ```
@@ -132,10 +129,6 @@ All configuration settings are saved in:
   /antigravity-config strategy=random
   /antigravity-config strategy=sticky
   /antigravity-config rotate=true
-  /antigravity-config quota=auto
-  /antigravity-config quota=gemini-cli
-  /antigravity-config quota=antigravity
-  /antigravity-config fallback=true
   /antigravity-config quiet=true
   ```
 
@@ -147,9 +140,7 @@ The extension supports fine-tuned control over account cycling and quota fallbac
 | :--- | :--- | :--- | :--- | :--- |
 | `strategy` | `accountSelectionStrategy` | `round-robin`, `random`, `sticky` | `round-robin` | Controls how the active account is selected from the authenticated pool.<br/><br/>**Behavior:**<br/>• `round-robin` *(Recommended)*: Cycles sequentially through all active accounts to evenly distribute load and help maximize overall token/request limits.<br/>• `random`: Dynamically chooses an account at random for each request.<br/>• `sticky`: Continues using the last successfully used account for consecutive requests, minimizing frequent account hops. |
 | `rotate` | `rotateAccounts` | `true`, `false` | `true` | Controls whether the active account pointer advances after a successful operation.<br/><br/>**Behavior:**<br/>• `true`: Once a request succeeds, the active pointer shifts, ensuring the next request uses the next account according to the selection strategy.<br/>• `false`: The current account remains active indefinitely until it encounters a failure or rate limit, at which point rotation logic takes over. |
-| `quota` | `geminiQuota` | `auto`, `antigravity`, `gemini-cli` | `auto` | Specifies the preferred Google quota family to route requests through.<br/><br/>**Behavior:**<br/>• `auto`: Routes dynamically. Standard models default to the main `antigravity` enterprise quota pool, while models with `-preview` or `gemini-cli-` prefixes default to the legacy `gemini-cli` quota pool.<br/>• `antigravity`: Prioritizes the newer enterprise Google Antigravity quota pool.<br/>• `gemini-cli`: Prioritizes the legacy separate Gemini CLI quota pool. |
-| `fallback` | `quotaFallback` | `true`, `false` | `true` | Enables intelligent high-availability failover across quota families.<br/><br/>**Behavior:**<br/>• `true`: If a request to the preferred quota family fails (e.g., rate limits, 429 status codes, server errors), the extension instantly retries using the secondary quota family before returning an error.<br/>• `false`: Disables cross-quota fallback; failures on the preferred family are returned immediately. |
-| `quiet` | `quiet` | `true`, `false` | `false` | Controls CLI output and developer verbosity.<br/><br/>**Behavior:**<br/>• `true`: Silences additional status print statements and startup notices.<br/>• `false`: Displays real-time diagnostic prints and critical notices (such as the Gemini CLI deprecation warning). |
+| `quiet` | `quiet` | `true`, `false` | `false` | Controls extension status output. |
 
 
 ### Account Operations
