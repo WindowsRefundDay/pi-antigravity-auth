@@ -24,6 +24,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomBytes, createHash } from "node:crypto";
 import { prepareAntigravityRequest, transformAntigravityResponse } from "opencode-antigravity-auth/dist/src/plugin/request.js";
+import { cleanJSONSchemaForAntigravity } from "opencode-antigravity-auth/dist/src/plugin/request-helpers.js";
 import { checkAccountsQuota } from "opencode-antigravity-auth/dist/src/plugin/quota.js";
 import {
   ANTIGRAVITY_CLIENT_ID,
@@ -67,20 +68,16 @@ type Account = {
 };
 type AccountStorage = { version: number; accounts: Account[]; activeIndex?: number; activeIndexByFamily?: Record<string, number> };
 type Access = { token: string; expires: number };
-type QuotaStyle = "antigravity" | "gemini-cli";
+type QuotaStyle = "antigravity";
 type AntigravityConfig = {
   accountSelectionStrategy: "round-robin" | "random" | "sticky";
   rotateAccounts: boolean;
-  geminiQuota: "auto" | "antigravity" | "gemini-cli";
-  quotaFallback: boolean;
   quiet: boolean;
   initialCooldownMs: number;
 };
 const DEFAULT_CONFIG: AntigravityConfig = {
   accountSelectionStrategy: "round-robin",
   rotateAccounts: true,
-  geminiQuota: "auto",
-  quotaFallback: true,
   quiet: false,
   initialCooldownMs: 2000,
 };
@@ -90,10 +87,6 @@ const CONFIG_MAPPING: Record<string, keyof AntigravityConfig> = {
   accountSelectionStrategy: "accountSelectionStrategy",
   rotate: "rotateAccounts",
   rotateAccounts: "rotateAccounts",
-  quota: "geminiQuota",
-  geminiQuota: "geminiQuota",
-  fallback: "quotaFallback",
-  quotaFallback: "quotaFallback",
   quiet: "quiet",
   cooldown: "initialCooldownMs",
   initialCooldownMs: "initialCooldownMs",
@@ -167,17 +160,11 @@ async function writeConfig(config: AntigravityConfig) {
   await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2));
 }
 function isGeminiModel(id: string) { return id.toLowerCase().includes("gemini"); }
-function quotaStylesFor(modelId: string, config: AntigravityConfig): QuotaStyle[] {
-  const id = modelId.toLowerCase();
-  if (!isGeminiModel(id)) return ["antigravity"];
-  if (id.startsWith("gemini-cli-") || id.endsWith("-preview")) return config.quotaFallback ? ["gemini-cli", "antigravity"] : ["gemini-cli"];
-  if (id.startsWith("antigravity-")) return config.quotaFallback ? ["antigravity", "gemini-cli"] : ["antigravity"];
-  if (config.geminiQuota === "gemini-cli") return config.quotaFallback ? ["gemini-cli", "antigravity"] : ["gemini-cli"];
-  if (config.geminiQuota === "antigravity") return config.quotaFallback ? ["antigravity", "gemini-cli"] : ["antigravity"];
-  return config.quotaFallback ? ["antigravity", "gemini-cli"] : ["antigravity"];
+function quotaStylesFor(_modelId: string, _config: AntigravityConfig): QuotaStyle[] {
+  return ["antigravity"];
 }
-function endpointsFor(style: QuotaStyle) {
-  return style === "gemini-cli" ? ["https://cloudcode-pa.googleapis.com"] : ENDPOINTS;
+function endpointsFor(_style: QuotaStyle) {
+  return ENDPOINTS;
 }
 function normalizeAntigravityUserAgent(userAgent?: string) {
   if (!userAgent) return undefined;
@@ -304,42 +291,41 @@ function toContents(model: Model<any>, context: Context) {
   }
   return contents;
 }
-function cleanSchema(x: any): any {
-  if (!x || typeof x !== "object") return x;
-  if (Array.isArray(x)) return x.map(cleanSchema);
+function sanitizeSchemaForAntigravity(schema: any): any {
+  if (!schema || typeof schema !== "object") return schema;
+  if (Array.isArray(schema)) return schema.map(sanitizeSchemaForAntigravity);
   const out: any = {};
-  for (const [k, v] of Object.entries(x)) {
-    if (["$schema", "$id", "$defs", "definitions"].includes(k)) continue;
-    out[k] = cleanSchema(v);
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "patternProperties") continue;
+    if (key === "enum" && Array.isArray(value)) {
+      const stringValues = value.filter((item): item is string => typeof item === "string");
+      if (stringValues.length > 0) out[key] = stringValues;
+      continue;
+    }
+    out[key] = sanitizeSchemaForAntigravity(value);
   }
   return out;
 }
 function toTools(context: Context) {
   if (!context.tools?.length) return undefined;
-  return [{ functionDeclarations: context.tools.map((t) => ({ name: t.name, description: t.description, parameters: cleanSchema(t.parameters) || { type: "object", properties: {} } })) }];
+  return [{ functionDeclarations: context.tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    parameters: sanitizeSchemaForAntigravity(cleanJSONSchemaForAntigravity(t.parameters)) || { type: "object", properties: {} },
+  })) }];
 }
 function resolveActualModel(id: string) {
   return id
-    .replace(/^gemini-3\.5-flash$/, "gemini-3.5-flash-medium")
-    .replace(/^gemini-3\.5-pro-preview$/, "gemini-3-pro-preview")
-    .replace(/^gemini-3\.5-flash-preview$/, "gemini-3-flash-preview")
-    .replace(/^gemini-cli-3\.5-pro-preview$/, "gemini-cli-3-pro-preview")
-    .replace(/^gemini-cli-3\.5-flash-preview$/, "gemini-cli-3-flash-preview")
     .replace(/^gemini-3\.1-pro-(low|high)$/, "antigravity-gemini-3.1-pro-$1")
     .replace(/^claude-sonnet-4-6-thinking$/, "claude-sonnet-4-6")
-    .replace(/^gemini-cli-/, "gemini-")
     .replace(/^antigravity-/, "")
     .replace(/^gemini-3-pro$/, "gemini-3-pro-low");
 }
 function patchedEffectiveModel(requested: string, style: QuotaStyle) {
   const normalized = requested.replace(/^antigravity-/i, "");
-  if (style === "antigravity" && /^gemini-3\.5-flash-(low|medium|high)$/i.test(normalized)) {
-    return normalized;
-  }
-  if (style === "gemini-cli" && /^gemini-3\.5-flash-(low|medium|high)$/i.test(normalized)) {
-    return "gemini-3-flash-preview";
-  }
-  return undefined;
+  return style === "antigravity" && /^gemini-3\.6-flash-(low|medium|high)$/i.test(normalized)
+    ? normalized
+    : undefined;
 }
 function patchPreparedModel(prepared: any, effectiveModel?: string) {
   if (!effectiveModel) return prepared;
@@ -351,7 +337,7 @@ function patchPreparedModel(prepared: any, effectiveModel?: string) {
     const body = JSON.parse(prepared.init.body);
     body.model = effectiveModel;
     if (body.request?.sessionId && typeof body.request.sessionId === "string") {
-      body.request.sessionId = body.request.sessionId.replace(/:gemini-3\.5-flash(-low|-medium|-high)?:/i, `:${effectiveModel}:`);
+      body.request.sessionId = body.request.sessionId.replace(/:gemini-3\.(5|6)-flash(-low|-medium|-high)?:/i, `:${effectiveModel}:`);
     }
     prepared.init.body = JSON.stringify(body);
     prepared.effectiveModel = effectiveModel;
@@ -634,9 +620,9 @@ async function exchange(code: string, verifier: string): Promise<OAuthCredential
 
 const models = [
   // Antigravity model picker models
-  { id: "gemini-3.5-flash-high", name: "Gemini 3.5 Flash (High)", reasoning: true, contextWindow: 1048576, maxTokens: 65536 },
-  { id: "gemini-3.5-flash-medium", name: "Gemini 3.5 Flash (Medium)", reasoning: true, contextWindow: 1048576, maxTokens: 65536 },
-  { id: "gemini-3.5-flash-low", name: "Gemini 3.5 Flash (Low)", reasoning: true, contextWindow: 1048576, maxTokens: 65536 },
+  { id: "gemini-3.6-flash-high", name: "Gemini 3.6 Flash (High)", reasoning: true, contextWindow: 1048576, maxTokens: 65536 },
+  { id: "gemini-3.6-flash-medium", name: "Gemini 3.6 Flash (Medium)", reasoning: true, contextWindow: 1048576, maxTokens: 65536 },
+  { id: "gemini-3.6-flash-low", name: "Gemini 3.6 Flash (Low)", reasoning: true, contextWindow: 1048576, maxTokens: 65536 },
   { id: "gemini-3.1-pro-high", name: "Gemini 3.1 Pro (High)", reasoning: true, contextWindow: 1048576, maxTokens: 65535 },
   { id: "gemini-3.1-pro-low", name: "Gemini 3.1 Pro (Low)", reasoning: true, contextWindow: 1048576, maxTokens: 65535 },
   { id: "gemini-3-flash", name: "Gemini 3 Flash", reasoning: true, contextWindow: 1048576, maxTokens: 65536 },
@@ -644,13 +630,6 @@ const models = [
   { id: "claude-opus-4-6-thinking", name: "Claude Opus 4.6 (Thinking)", reasoning: true, contextWindow: 200000, maxTokens: 64000 },
   { id: "gpt-oss-120b-medium", name: "GPT-OSS 120B (Medium)", reasoning: true, contextWindow: 200000, maxTokens: 64000 },
 
-  // Extra Gemini CLI quota models (Gemini-only, separate quota from Antigravity)
-  { id: "gemini-3-pro-preview", name: "Gemini CLI Gemini 3 Pro Preview", reasoning: true, contextWindow: 1048576, maxTokens: 65535 },
-  { id: "gemini-3.1-pro-preview", name: "Gemini CLI Gemini 3.1 Pro Preview", reasoning: true, contextWindow: 1048576, maxTokens: 65535 },
-  { id: "gemini-3-flash-preview", name: "Gemini CLI Gemini 3 Flash Preview", reasoning: true, contextWindow: 1048576, maxTokens: 65536 },
-  { id: "gemini-cli-3-pro-preview", name: "Gemini CLI Gemini 3 Pro Preview (explicit)", reasoning: true, contextWindow: 1048576, maxTokens: 65535 },
-  { id: "gemini-cli-3.1-pro-preview", name: "Gemini CLI Gemini 3.1 Pro Preview (explicit)", reasoning: true, contextWindow: 1048576, maxTokens: 65535 },
-  { id: "gemini-cli-3-flash-preview", name: "Gemini CLI Gemini 3 Flash Preview (explicit)", reasoning: true, contextWindow: 1048576, maxTokens: 65536 },
 ].map((m) => ({ ...m, input: ["text", "image"] as ("text" | "image")[], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }));
 
 export default function (pi: ExtensionAPI) {
@@ -658,7 +637,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (event: SessionStartEvent, ctx: ExtensionContext) => {
     // Only print warnings and notifications in active UI sessions
     if (ctx.hasUI) {
-      ctx.ui.notify("Note: Gemini CLI separate quota might be deprecated in the future. Check README for more info.", "info");
       try {
         const storage = await readAccounts();
         if (!storage.accounts || storage.accounts.length === 0) {
@@ -669,7 +647,6 @@ export default function (pi: ExtensionAPI) {
       }
     } else {
       // Print to console if running in CLI non-interactive mode
-      console.log("\x1b[33m[Antigravity] Note: Gemini CLI separate quota might be deprecated in the future. Check README for more info.\x1b[0m\n");
       try {
         const storage = await readAccounts();
         if (!storage.accounts || storage.accounts.length === 0) {
@@ -766,7 +743,7 @@ export default function (pi: ExtensionAPI) {
       const s = await readAccounts();
       const c = await readConfig();
       ctx.ui.notify([
-        `Config: strategy=${c.accountSelectionStrategy}, rotate=${c.rotateAccounts}, quota=${c.geminiQuota}, fallback=${c.quotaFallback}, cooldown=${c.initialCooldownMs}ms`,
+        `Config: strategy=${c.accountSelectionStrategy}, rotate=${c.rotateAccounts}, cooldown=${c.initialCooldownMs}ms`,
         `Active index: ${s.activeIndex ?? 0}`,
         ...s.accounts.map((a, i) => `${i + 1}. ${a.email || "(no email)"}${a.lastUsed ? ` lastUsed=${new Date(a.lastUsed).toLocaleString()}` : ""}`),
       ].join("\n") || "No accounts imported", "info");
@@ -834,13 +811,6 @@ export default function (pi: ExtensionAPI) {
             }
           }
           
-          const cliModels = r.geminiCliQuota?.models || [];
-          if (cliModels.length > 0) {
-            outputLines.push("  [Gemini CLI Quotas]");
-            for (const m of cliModels) {
-              outputLines.push(`    - ${m.modelId.padEnd(24)}: ${makeBar(m.remainingFraction)}${formatReset(m.resetTime)}`);
-            }
-          }
         }
         
         outputLines.push("");
@@ -861,12 +831,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("antigravity-config", {
     description: "Show or set Antigravity config. Usage: /antigravity-config key=value ...",
     getArgumentCompletions: (argumentPrefix: string) => {
-      const keys = ["strategy", "rotate", "quota", "fallback", "quiet", "cooldown"];
+      const keys = ["strategy", "rotate", "quiet", "cooldown"];
       const keyValues: Record<string, string[]> = {
         strategy: ["round-robin", "random", "sticky"],
         rotate: ["true", "false"],
-        quota: ["auto", "antigravity", "gemini-cli"],
-        fallback: ["true", "false"],
         quiet: ["true", "false"],
         cooldown: ["1000", "2000", "5000", "10000", "30000"],
       };
@@ -912,8 +880,6 @@ export default function (pi: ExtensionAPI) {
           `Antigravity Configuration:\n` +
           `• strategy: ${config.accountSelectionStrategy} (round-robin | random | sticky)\n` +
           `• rotate: ${config.rotateAccounts} (true | false)\n` +
-          `• quota: ${config.geminiQuota} (auto | antigravity | gemini-cli)\n` +
-          `• fallback: ${config.quotaFallback} (true | false)\n` +
           `• quiet: ${config.quiet} (true | false)\n` +
           `• cooldown: ${config.initialCooldownMs} ms\n\n` +
           `Saved in: ${CONFIG_PATH}\n` +
@@ -934,8 +900,6 @@ export default function (pi: ExtensionAPI) {
         }
         if (key === "accountSelectionStrategy" && ["round-robin", "random", "sticky"].includes(value)) config.accountSelectionStrategy = value as any;
         else if (key === "rotateAccounts") config.rotateAccounts = /^(1|true|yes|on)$/i.test(value);
-        else if (key === "geminiQuota" && ["auto", "antigravity", "gemini-cli"].includes(value)) config.geminiQuota = value as any;
-        else if (key === "quotaFallback") config.quotaFallback = /^(1|true|yes|on)$/i.test(value);
         else if (key === "quiet") config.quiet = /^(1|true|yes|on)$/i.test(value);
         else if (key === "initialCooldownMs") {
           const parsed = parseInt(value, 10);
@@ -949,8 +913,6 @@ export default function (pi: ExtensionAPI) {
         `Antigravity Configuration Saved:\n` +
         `• strategy: ${config.accountSelectionStrategy}\n` +
         `• rotate: ${config.rotateAccounts}\n` +
-        `• quota: ${config.geminiQuota}\n` +
-        `• fallback: ${config.quotaFallback}\n` +
         `• quiet: ${config.quiet}\n` +
         `• cooldown: ${config.initialCooldownMs} ms`,
         "info"
@@ -1024,5 +986,6 @@ export {
   patchPreparedModel,
   thinkingConfig,
   buildRequestBody,
+  sanitizeSchemaForAntigravity,
   normalizeAntigravityUserAgent
 };

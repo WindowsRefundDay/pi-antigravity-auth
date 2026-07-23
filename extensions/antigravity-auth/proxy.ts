@@ -2,6 +2,7 @@ import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { prepareAntigravityRequest, transformAntigravityResponse } from "opencode-antigravity-auth/dist/src/plugin/request.js";
+import { cleanJSONSchemaForAntigravity } from "opencode-antigravity-auth/dist/src/plugin/request-helpers.js";
 import { getRandomizedHeaders } from "opencode-antigravity-auth/dist/src/constants.js";
 import {
   readAccounts,
@@ -19,6 +20,7 @@ import {
   patchedEffectiveModel,
   patchPreparedModel,
   thinkingConfig,
+  sanitizeSchemaForAntigravity,
   isGeminiModel,
   CONFIG_PATH
 } from "./index.js";
@@ -32,17 +34,6 @@ function mapFinish(reason: string): string | null {
   return "stop";
 }
 
-function cleanSchema(x: any): any {
-  if (!x || typeof x !== "object") return x;
-  if (Array.isArray(x)) return x.map(cleanSchema);
-  const out: any = {};
-  for (const [k, v] of Object.entries(x)) {
-    if (["$schema", "$id", "$defs", "definitions"].includes(k)) continue;
-    out[k] = cleanSchema(v);
-  }
-  return out;
-}
-
 function translateOpenAITools(openAITools: any[]) {
   if (!openAITools || openAITools.length === 0) return undefined;
   
@@ -53,7 +44,7 @@ function translateOpenAITools(openAITools: any[]) {
       return {
         name: t.function.name,
         description: t.function.description || "",
-        parameters: cleanSchema(parameters)
+        parameters: sanitizeSchemaForAntigravity(cleanJSONSchemaForAntigravity(parameters))
       };
     });
 
@@ -162,21 +153,15 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify({
       object: "list",
       data: [
-        { id: "gemini-3.5-flash-high", object: "model", created: 1716200000, owned_by: "google" },
-        { id: "gemini-3.5-flash-medium", object: "model", created: 1716200000, owned_by: "google" },
-        { id: "gemini-3.5-flash-low", object: "model", created: 1716200000, owned_by: "google" },
+        { id: "gemini-3.6-flash-high", object: "model", created: 1716200000, owned_by: "google" },
+        { id: "gemini-3.6-flash-medium", object: "model", created: 1716200000, owned_by: "google" },
+        { id: "gemini-3.6-flash-low", object: "model", created: 1716200000, owned_by: "google" },
         { id: "gemini-3.1-pro-high", object: "model", created: 1716200000, owned_by: "google" },
         { id: "gemini-3.1-pro-low", object: "model", created: 1716200000, owned_by: "google" },
         { id: "gemini-3-flash", object: "model", created: 1716200000, owned_by: "google" },
         { id: "claude-sonnet-4-6-thinking", object: "model", created: 1716200000, owned_by: "anthropic" },
         { id: "claude-opus-4-6-thinking", object: "model", created: 1716200000, owned_by: "anthropic" },
-        { id: "gpt-oss-120b-medium", object: "model", created: 1716200000, owned_by: "google" },
-        { id: "gemini-3-pro-preview", object: "model", created: 1716200000, owned_by: "google" },
-        { id: "gemini-3.1-pro-preview", object: "model", created: 1716200000, owned_by: "google" },
-        { id: "gemini-3-flash-preview", object: "model", created: 1716200000, owned_by: "google" },
-        { id: "gemini-cli-3-pro-preview", object: "model", created: 1716200000, owned_by: "google" },
-        { id: "gemini-cli-3.1-pro-preview", object: "model", created: 1716200000, owned_by: "google" },
-        { id: "gemini-cli-3-flash-preview", object: "model", created: 1716200000, owned_by: "google" }
+        { id: "gpt-oss-120b-medium", object: "model", created: 1716200000, owned_by: "google" }
       ]
     }));
     return;
@@ -190,10 +175,10 @@ const server = createServer(async (req, res) => {
         console.log(`[Antigravity Proxy] Received ${req.method} ${req.url}`);
         console.log(`[Antigravity Proxy] Payload:`, bodyText);
         const payload = JSON.parse(bodyText || "{}");
-        let modelId = payload.model || "gemini-3.5-flash-medium";
+        let modelId = payload.model || "gemini-3.6-flash-medium";
         if (!isGeminiModel(modelId)) {
-          console.log(`[Antigravity Proxy] Normalizing model ${modelId} -> gemini-3.5-flash-medium`);
-          modelId = "gemini-3.5-flash-medium";
+          console.log(`[Antigravity Proxy] Normalizing model ${modelId} -> gemini-3.6-flash-medium`);
+          modelId = "gemini-3.6-flash-medium";
         }
         
         let openAIMessages = payload.messages || [];
